@@ -8,7 +8,8 @@ const NAV = [
   { to: '/new', label: 'New change', icon: '＋', soon: true },
   { to: '/tasks', label: 'Tasks', icon: '☑', soon: true },
   { to: '/calendar', label: 'Calendar', icon: '▦', soon: true },
-  { to: '/hotels', label: 'Hotels & systems', icon: '⌂', soon: true },
+  { to: '/hotels', label: 'Hotels & systems', icon: '⌂' },
+  { to: '/systems', label: 'Systems', icon: '⚙' },
   { to: '/team', label: 'Team', icon: '☺' },
 ];
 
