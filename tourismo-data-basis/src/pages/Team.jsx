@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase, adminUsers, niceError } from '../supabase.js';
 import { useAuth } from '../auth.jsx';
 import { ROLES, roleLabel } from '../labels.js';
+import { UnlinkedExcelNames } from './Hotels.jsx';
 
 const EMPTY = { full_name: '', email: '', short_name: '', role: 'member', can_open_no_prices: false };
 
@@ -62,6 +63,7 @@ export default function Team() {
       </div>
 
       {error && <div className="alert error">{error}</div>}
+      {isAdmin && <UnlinkedExcelNames key={people.length} />}
 
       <div className="card table-card">
         <div className="table-wrap">
