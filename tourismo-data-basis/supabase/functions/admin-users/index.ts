@@ -71,6 +71,9 @@ Deno.serve(async (req) => {
         }).eq('id', data.user.id);
         if (pErr) return json({ error: 'Account created, but saving the details failed: ' + pErr.message }, 500);
 
+        // keep the temporary password visible to managers/admins until the person sets their own
+        await admin.from('temp_passwords').upsert({ user_id: data.user.id, password, created_by: who.user.id });
+
         return json({ ok: true, user_id: data.user.id, temp_password: password });
       }
 
@@ -85,6 +88,8 @@ Deno.serve(async (req) => {
           user_metadata: { ...(target.user.user_metadata ?? {}), must_change_password: true },
         });
         if (error) return json({ error: error.message }, 400);
+        // (the database removes the old one when the password changes; store the new one)
+        await admin.from('temp_passwords').upsert({ user_id: userId, password, created_by: who.user.id });
         return json({ ok: true, temp_password: password });
       }
 
@@ -101,6 +106,7 @@ Deno.serve(async (req) => {
         // block / unblock sign-in
         const { error } = await admin.auth.admin.updateUserById(userId, { ban_duration: active ? 'none' : '876000h' });
         if (error) return json({ error: error.message }, 400);
+        if (!active) await admin.from('temp_passwords').delete().eq('user_id', userId);
         return json({ ok: true });
       }
 
