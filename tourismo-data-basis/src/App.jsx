@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import Team from './pages/Team.jsx';
 import Account from './pages/Account.jsx';
 import ComingSoon from './pages/ComingSoon.jsx';
+import Hotels, { HotelDetail, Systems } from './pages/Hotels.jsx';
 
 function FullScreenMessage({ title, text, action }) {
   return (
@@ -52,8 +53,9 @@ export default function App() {
           text="My tasks, team tasks, “I’ll take this”, Done, and reassigning by managers." />} />
         <Route path="/calendar" element={<ComingSoon title="Calendar" step={5}
           text="Month view per hotel: which rooms are closed in which system, and the history of every change." />} />
-        <Route path="/hotels" element={<ComingSoon title="Hotels & systems" step={3}
-          text="Hotels, room types, the responsibility matrix (who handles which hotel in which system) and rules." />} />
+        <Route path="/hotels" element={<Hotels />} />
+        <Route path="/hotels/:id" element={<HotelDetail />} />
+        <Route path="/systems" element={<Systems />} />
         <Route path="/team" element={<Team />} />
         <Route path="/account" element={<Account />} />
         <Route path="*" element={<Navigate to="/" replace />} />
