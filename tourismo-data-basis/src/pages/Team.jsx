@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase, adminUsers, niceError } from '../supabase.js';
 import { useAuth } from '../auth.jsx';
 import { ROLES, roleLabel } from '../labels.js';
@@ -6,37 +6,42 @@ import { ROLES, roleLabel } from '../labels.js';
 const EMPTY = { full_name: '', email: '', short_name: '', role: 'member', can_open_no_prices: false };
 
 export default function Team() {
-  const { isAdmin, profile: me, reloadProfile } = useAuth();
+  const { isAdmin, isManager, profile: me, reloadProfile } = useAuth();
   const [people, setPeople] = useState([]);
+  const [temps, setTemps] = useState({});         // user_id -> temporary password (admins/managers only)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [showInactive, setShowInactive] = useState(false);
   const [editing, setEditing] = useState(null);   // profile being edited, or EMPTY for new
-  const [secret, setSecret] = useState(null);     // { name, email, password } to show once
+  const [secret, setSecret] = useState(null);     // { name, email, password } message to copy
 
   async function load() {
     setLoading(true);
     const { data, error } = await supabase.from('profiles').select('*').order('is_active', { ascending: false }).order('full_name');
     if (error) setError(niceError(error)); else setPeople(data);
+    if (isManager) {
+      const { data: t } = await supabase.from('temp_passwords').select('user_id, password, created_at');
+      setTemps(Object.fromEntries((t || []).map((x) => [x.user_id, x])));
+    }
     setLoading(false);
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [isManager]);
 
-  const shown = useMemo(() => people.filter((p) => showInactive || p.is_active), [people, showInactive]);
-  const inactiveCount = people.filter((p) => !p.is_active).length;
+  const activeCount = people.filter((p) => p.is_active).length;
+  const inactiveCount = people.length - activeCount;
 
   async function resetPassword(p) {
     if (!confirm(`Create a new temporary password for ${p.full_name || p.email}? Their current password will stop working.`)) return;
     try {
       const r = await adminUsers({ action: 'reset_password', user_id: p.id });
       setSecret({ name: p.full_name || p.email, email: p.email, password: r.temp_password, reset: true });
+      await load();
     } catch (e) { alert(niceError(e)); }
   }
 
   async function setActive(p, active) {
     const msg = active
       ? `Re-activate ${p.full_name || p.email}? They will be able to sign in again.`
-      : `Deactivate ${p.full_name || p.email}? They will not be able to sign in, and their open tasks will become unassigned. Their history is kept.`;
+      : `Deactivate ${p.full_name || p.email}? They will not be able to sign in, and their open tasks will become unassigned. They stay in this list as a former member, and their history is kept.`;
     if (!confirm(msg)) return;
     try {
       await adminUsers({ action: 'set_active', user_id: p.id, active });
@@ -44,12 +49,14 @@ export default function Team() {
     } catch (e) { alert(niceError(e)); }
   }
 
+  const cols = 7 + (isManager ? 1 : 0) + (isAdmin ? 1 : 0);
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1>Team</h1>
-          <p className="muted">Everyone who can sign in to the platform.</p>
+          <p className="muted">{activeCount} active · {inactiveCount} former {inactiveCount === 1 ? 'member' : 'members'}</p>
         </div>
         {isAdmin && <button className="btn primary" onClick={() => setEditing({ ...EMPTY })}>＋ Add team member</button>}
       </div>
@@ -57,46 +64,56 @@ export default function Team() {
       {error && <div className="alert error">{error}</div>}
 
       <div className="card table-card">
-        <div className="table-tools">
-          <label className="check">
-            <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-            Show former team members ({inactiveCount})
-          </label>
-        </div>
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
                 <th>Name</th><th>Name in old Excel</th><th>Email</th><th>Role</th>
                 <th title='Can open dates closed because of "no prices"'>Can open “!!!!!”</th><th>Status</th>
+                {isManager && <th title="Shown until the person sets their own password">Temporary password</th>}
                 {isAdmin && <th className="right">Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={7} className="muted">Loading…</td></tr>}
-              {!loading && shown.map((p) => (
-                <tr key={p.id} className={p.is_active ? '' : 'inactive'}>
-                  <td><strong>{p.full_name || '—'}</strong>{p.id === me.id && <span className="tag">you</span>}</td>
-                  <td>{p.short_name || '—'}</td>
-                  <td>{p.email}</td>
-                  <td><span className={`role role-${p.role}`}>{roleLabel(p.role)}</span></td>
-                  <td>{p.can_open_no_prices || ['manager', 'admin'].includes(p.role) ? 'Yes' : 'No'}</td>
-                  <td>{p.is_active ? <span className="status ok">Active</span> : <span className="status off">Former member</span>}</td>
-                  {isAdmin && (
-                    <td className="right"><div className="row-actions">
-                      <button className="btn small" onClick={() => setEditing(p)}>Edit</button>
-                      {p.is_active && <button className="btn small" onClick={() => resetPassword(p)}>Reset password</button>}
-                      {p.id !== me.id && (p.is_active
-                        ? <button className="btn small danger" onClick={() => setActive(p, false)}>Deactivate</button>
-                        : <button className="btn small" onClick={() => setActive(p, true)}>Re-activate</button>)}
-                    </div></td>
-                  )}
-                </tr>
-              ))}
+              {loading && <tr><td colSpan={cols} className="muted">Loading…</td></tr>}
+              {!loading && people.map((p) => {
+                const temp = temps[p.id];
+                return (
+                  <tr key={p.id} className={p.is_active ? '' : 'inactive'}>
+                    <td><strong>{p.full_name || '—'}</strong>{p.id === me.id && <span className="tag">you</span>}</td>
+                    <td>{p.short_name || '—'}</td>
+                    <td>{p.email}</td>
+                    <td><span className={`role role-${p.role}`}>{roleLabel(p.role)}</span></td>
+                    <td>{p.can_open_no_prices || ['manager', 'admin'].includes(p.role) ? 'Yes' : 'No'}</td>
+                    <td>
+                      {!p.is_active
+                        ? <span className="status off">Former member</span>
+                        : temp
+                          ? <span className="status wait">Waiting for first sign-in</span>
+                          : <span className="status ok">Active</span>}
+                    </td>
+                    {isManager && (
+                      <td>{temp && p.is_active ? <TempPassword value={temp.password} /> : <span className="muted">—</span>}</td>
+                    )}
+                    {isAdmin && (
+                      <td className="right"><div className="row-actions">
+                        <button className="btn small" onClick={() => setEditing(p)}>Edit</button>
+                        {p.is_active && <button className="btn small" onClick={() => resetPassword(p)}>Reset password</button>}
+                        {p.id !== me.id && (p.is_active
+                          ? <button className="btn small danger" onClick={() => setActive(p, false)}>Deactivate</button>
+                          : <button className="btn small" onClick={() => setActive(p, true)}>Re-activate</button>)}
+                      </div></td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
+      {isManager && (
+        <p className="hint">Temporary passwords are visible only to managers and admins, and disappear automatically as soon as the person sets their own password.</p>
+      )}
 
       {editing && (
         <MemberDialog
@@ -179,7 +196,7 @@ function MemberDialog({ person, onClose, onSaved }) {
           {['manager', 'admin'].includes(form.role) && <span className="muted"> — always allowed for managers and admins</span>}
         </label>
 
-        {isNew && <p className="hint">A temporary password will be created. You will see it once, and the person chooses their own password at first sign-in.</p>}
+        {isNew && <p className="hint">A temporary password will be created. It stays visible to managers and admins in the Team list until the person chooses their own password at first sign-in.</p>}
         {error && <div className="alert error">{error}</div>}
 
         <div className="modal-actions">
@@ -191,6 +208,20 @@ function MemberDialog({ person, onClose, onSaved }) {
   );
 }
 
+function TempPassword({ value }) {
+  const [shown, setShown] = useState(false);
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="temp-pw">
+      <code>{shown ? value : '••••••••••'}</code>
+      <button className="btn small" onClick={() => setShown(!shown)}>{shown ? 'Hide' : 'Show'}</button>
+      <button className="btn small" onClick={async () => { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
+        {copied ? '✓' : 'Copy'}
+      </button>
+    </span>
+  );
+}
+
 function PasswordNotice({ secret, onClose }) {
   const site = window.location.href.split('#')[0];
   const text = `Hi ${secret.name.split(' ')[0]},\n\n${secret.reset ? 'Your password for the Data Basis platform was reset.' : 'Your account for the Tourismo Data Basis platform is ready.'}\n\nLink: ${site}\nEmail: ${secret.email}\nTemporary password: ${secret.password}\n\nYou will be asked to choose your own password when you sign in.`;
@@ -199,7 +230,7 @@ function PasswordNotice({ secret, onClose }) {
     <div className="modal-backdrop">
       <div className="modal">
         <h2>{secret.reset ? 'New temporary password' : 'Account created'}</h2>
-        <p>Send this to <strong>{secret.name}</strong> (for example by Teams, WhatsApp or in person). <strong>It is shown only once.</strong></p>
+        <p>Send this to <strong>{secret.name}</strong> (for example by Teams, WhatsApp or in person). Until they set their own password, managers and admins can also see it in the Team list.</p>
         <pre className="secret">{text}</pre>
         <div className="modal-actions">
           <button className="btn" onClick={async () => { await navigator.clipboard.writeText(text); setCopied(true); }}>
