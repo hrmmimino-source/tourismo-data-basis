@@ -118,7 +118,7 @@ export default function Hotels() {
       <div className="page-head">
         <div>
           <h1>Hotels &amp; systems</h1>
-          <p className="muted">{hotels.filter((h) => h.is_active).length} hotels · who handles which hotel in which system</p>
+          <p className="muted">{hotels.filter((h) => h.is_active).length} active hotels · {hotels.filter((h) => !h.is_active).length} inactive hotels · who handles which hotel in which system</p>
         </div>
         <div className="head-actions">
           <div className="seg">
@@ -154,18 +154,18 @@ export default function Hotels() {
         <div className="card table-card">
           <div className="table-wrap">
             <table className="table clickable">
-              <thead><tr><th>Code</th><th>Hotel</th><th>City</th><th>Room types</th><th>Active in</th><th>Rules</th><th>Flags</th></tr></thead>
+              <thead><tr><th>Code</th><th>Hotel</th><th>City</th><th>Room types</th><th title="Number of systems where the hotel is Active / Inactive / Not active">Systems: active · inactive · not active</th><th>Rules</th><th>Flags</th></tr></thead>
               <tbody>
                 {shown.map((h) => {
                   const row = byHotel[h.id] || {};
-                  const act = Object.values(row).filter((c) => c.status === 'active').length;
+                  const cnt = (st) => Object.values(row).filter((c) => c.status === st).length;
                   return (
                     <tr key={h.id} onClick={() => navigate(`/hotels/${h.id}`)} className={h.is_active ? '' : 'inactive'}>
                       <td className="muted">{h.code}</td>
                       <td><strong>{h.name}</strong></td>
                       <td>{h.city || <span className="muted">—</span>}</td>
                       <td>{roomCount[h.id] || <span className="muted">whole hotel</span>}</td>
-                      <td>{act} {act === 1 ? 'system' : 'systems'}</td>
+                      <td className="nowrap"><span className="cnt cnt-active" title="Active">{cnt('active')}</span><span className="cnt cnt-inactive" title="Inactive (closed now)">{cnt('inactive')}</span><span className="cnt cnt-not_active" title="Not active (not in our account)">{cnt('not_active')}</span></td>
                       <td>{ruleCount[h.id] ? <span className="pill warn">{ruleCount[h.id]}</span> : <span className="muted">—</span>}</td>
                       <td>
                         {h.no_prices_lock && <span className="pill lock">!!!!! no prices</span>}
@@ -316,14 +316,10 @@ export function HotelDetail() {
       )}
       {hotel.notes && <div className="card note-card">{hotel.notes}</div>}
 
+      <SystemsCard hotel={hotel} cells={cells} systems={systems} people={people} canEdit={isManager} onChanged={load} />
       <div className="grid-detail">
-        <div>
-          <SystemsCard hotel={hotel} cells={cells} systems={systems} people={people} canEdit={isManager} onChanged={load} />
-        </div>
-        <div>
-          <RoomsCard hotelId={hotelId} rooms={rooms} canEdit={isManager} onChanged={load} />
-          <RulesCard hotelId={hotelId} active={activeRules} old={oldRules} systems={systems} canEdit={isManager} onChanged={load} />
-        </div>
+        <RoomsCard hotelId={hotelId} rooms={rooms} canEdit={isManager} onChanged={load} />
+        <RulesCard hotelId={hotelId} active={activeRules} old={oldRules} systems={systems} canEdit={isManager} onChanged={load} />
       </div>
 
       {editing && <EditHotel hotel={hotel} onClose={() => setEditing(false)} onSave={async (patch) => { await updateHotel(patch); setEditing(false); }} />}
@@ -380,13 +376,13 @@ function SystemsCard({ hotel, cells, systems, people, canEdit, onChanged }) {
     onChanged();
   }
 
-  const active = cells.filter((c) => c.status === 'active').length;
+  const n = (st) => systems.filter((s) => (bySystem[s.id]?.status || 'na') === st).length;
   return (
     <div className="card">
-      <h2>Systems <span className="muted small">· active in {active} of {systems.length}</span></h2>
+      <h2>Systems <span className="muted small">· {n('active')} active · {n('inactive')} inactive · {n('not_active')} not active · {n('na')} N/A</span></h2>
       <div className="table-wrap">
-        <table className="table compact">
-          <thead><tr><th>System</th><th>Status</th><th>Responsible</th><th title="Business-to-business only">B2B only</th><th>Hotel ID in system</th><th /></tr></thead>
+        <table className="table compact systems-table">
+          <thead><tr><th>System</th><th>Status</th><th>Responsible</th><th>Hotel ID in system <span className="muted small">(optional)</span></th><th /></tr></thead>
           <tbody>
             {systems.map((s) => {
               const c = bySystem[s.id] || { status: 'na' };
@@ -415,9 +411,6 @@ function SystemsCard({ hotel, cells, systems, people, canEdit, onChanged }) {
                     {inactivePerson && <div className="hint warn-text">Former member — choose someone else</div>}
                   </td>
                   <td>
-                    <input type="checkbox" checked={!!c.b2b_only} disabled={!canEdit} onChange={(e) => save(s, { b2b_only: e.target.checked })} />
-                  </td>
-                  <td>
                     {canEdit
                       ? <input className="code-input" defaultValue={c.partner_hotel_code || ''} placeholder="—"
                           onBlur={(e) => { const v = e.target.value.trim() || null; if (v !== (c.partner_hotel_code || null)) save(s, { partner_hotel_code: v }); }} />
@@ -430,7 +423,7 @@ function SystemsCard({ hotel, cells, systems, people, canEdit, onChanged }) {
           </tbody>
         </table>
       </div>
-      <p className="hint">Changes save immediately. New stop sales and openings will create tasks only for systems marked <strong>Active</strong>, assigned to the responsible person.</p>
+      <p className="hint">Changes save immediately. New stop sales and openings will create tasks only for systems marked <strong>Active</strong>, assigned to the responsible person. Hotel IDs are optional: fill them in when you know them (they will help the robots later).</p>
     </div>
   );
 }
@@ -487,35 +480,126 @@ function RoomsCard({ hotelId, rooms, canEdit, onChanged }) {
 }
 
 // ---------------------------------------------------------------- rules & notes
+function SystemPicker({ systems, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const names = value.map((id) => systems.find((s) => s.id === id)?.name).filter(Boolean);
+  const label = !value.length ? 'All systems' : value.length <= 2 ? names.join(', ') : `${value.length} systems`;
+  const toggle = (id) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  return (
+    <div className="picker">
+      <button type="button" className="picker-btn" onClick={() => setOpen(!open)}>{label} <span className="muted">▾</span></button>
+      {open && (
+        <>
+          <div className="picker-backdrop" onClick={() => setOpen(false)} />
+          <div className="picker-pop">
+            <label className="check"><input type="checkbox" checked={!value.length} onChange={() => onChange([])} /> All systems</label>
+            <div className="picker-sep" />
+            {systems.map((s) => (
+              <label key={s.id} className="check"><input type="checkbox" checked={value.includes(s.id)} onChange={() => toggle(s.id)} /> {s.name}</label>
+            ))}
+            <button type="button" className="btn small picker-done" onClick={() => setOpen(false)}>Done</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function QuickNotesDialog({ notes, onClose, onChanged }) {
+  const [text, setText] = useState('');
+  const [type, setType] = useState('note');
+  async function add(e) {
+    e.preventDefault();
+    if (!text.trim()) return;
+    const { error } = await supabase.from('quick_notes').insert({ text: text.trim(), rule_type: type, sort_order: notes.length + 1 });
+    if (error) return alert(niceError(error));
+    setText(''); setType('note'); onChanged();
+  }
+  async function remove(n) {
+    if (!confirm(`Remove the quick note “${n.text}” from the list? Notes already added to hotels stay.`)) return;
+    const { error } = await supabase.from('quick_notes').delete().eq('id', n.id);
+    if (error) return alert(niceError(error));
+    onChanged();
+  }
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+        <h2>Quick notes</h2>
+        <p className="hint">One-click notes for every hotel page. Managers and admins can change this list.</p>
+        <ul className="quick-list">
+          {notes.map((n) => (
+            <li key={n.id}>
+              <span><span className={`pill ${n.rule_type === 'note' ? '' : 'warn'}`}>{ruleLabel(n.rule_type)}</span> {n.text}</span>
+              <button className="btn small danger" onClick={() => remove(n)}>Delete</button>
+            </li>
+          ))}
+          {!notes.length && <li className="muted">No quick notes yet.</li>}
+        </ul>
+        <form className="rule-add" onSubmit={add}>
+          <select value={type} onChange={(e) => setType(e.target.value)}>
+            {RULE_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+          <input placeholder="New quick note, e.g. არ გვაქვს ფასი ამ პერიოდზე" value={text} onChange={(e) => setText(e.target.value)} />
+          <button className="btn">Add to list</button>
+        </form>
+        <div className="modal-actions"><button className="btn primary" onClick={onClose}>Done</button></div>
+      </div>
+    </div>
+  );
+}
+
 function RulesCard({ hotelId, active, old, systems, canEdit, onChanged }) {
   const { profile } = useAuth();
   const [showOld, setShowOld] = useState(false);
-  const [form, setForm] = useState({ rule_type: 'note', text: '', system_id: '' });
+  const [form, setForm] = useState({ rule_type: 'note', text: '', system_ids: [] });
+  const [quick, setQuick] = useState([]);
+  const [managing, setManaging] = useState(false);
+  const loadQuick = () => supabase.from('quick_notes').select('*').order('sort_order').order('id').then(({ data }) => setQuick(data || []));
+  useEffect(() => { loadQuick(); }, []);
+
+  async function insertRule({ rule_type, text, system_ids }) {
+    const { error } = await supabase.from('hotel_rules').insert({
+      hotel_id: hotelId, rule_type, text,
+      system_ids: system_ids.length ? system_ids : null,
+      severity: rule_type === 'note' ? 'info' : 'warning',
+      created_by: profile.id, source: 'Added in platform', source_date: new Date().toISOString().slice(0, 10),
+    });
+    if (error) { alert(niceError(error)); return false; }
+    onChanged();
+    return true;
+  }
   async function add(e) {
     e.preventDefault();
     if (!form.text.trim()) return;
-    const { error } = await supabase.from('hotel_rules').insert({
-      hotel_id: hotelId, rule_type: form.rule_type, text: form.text.trim(),
-      system_id: form.system_id ? Number(form.system_id) : null,
-      severity: form.rule_type === 'note' ? 'info' : 'warning',
-      created_by: profile.id, source: 'Added in platform', source_date: new Date().toISOString().slice(0, 10),
-    });
-    if (error) return alert(niceError(error));
-    setForm({ rule_type: 'note', text: '', system_id: '' }); onChanged();
+    if (await insertRule({ ...form, text: form.text.trim() })) setForm({ rule_type: 'note', text: '', system_ids: [] });
   }
   async function toggle(r) {
     const { error } = await supabase.from('hotel_rules').update({ is_active: !r.is_active }).eq('id', r.id);
     if (error) return alert(niceError(error));
     onChanged();
   }
-  const sysName = (sid) => systems.find((s) => s.id === sid)?.name;
+  async function remove(r) {
+    if (!confirm('Delete this note permanently? (Use “Archive” instead if you want to keep it in the history.)')) return;
+    const { error } = await supabase.from('hotel_rules').delete().eq('id', r.id);
+    if (error) return alert(niceError(error));
+    onChanged();
+  }
+  const sysNames = (r) => {
+    const ids = r.system_ids?.length ? r.system_ids : (r.system_id ? [r.system_id] : []);
+    return ids.map((id) => systems.find((s) => s.id === id)?.name).filter(Boolean);
+  };
   const Item = ({ r }) => (
     <li className={r.is_active ? '' : 'inactive'}>
       <div className="rule-head">
         <span className={`pill ${r.rule_type === 'note' ? '' : 'warn'}`}>{ruleLabel(r.rule_type)}</span>
-        {r.system_id && <span className="pill">{sysName(r.system_id)}</span>}
+        {sysNames(r).map((n) => <span key={n} className="pill sys">{n}</span>)}
         <span className="muted small">{[r.source, r.source_date && new Date(r.source_date).toLocaleDateString('en-GB')].filter(Boolean).join(' · ')}</span>
-        {canEdit && <button className="link-btn small" onClick={() => toggle(r)}>{r.is_active ? 'Archive' : 'Restore'}</button>}
+        {canEdit && (
+          <span className="rule-actions">
+            <button className="link-btn small" onClick={() => toggle(r)}>{r.is_active ? 'Archive' : 'Restore'}</button>
+            <button className="link-btn small danger-text" onClick={() => remove(r)}>Delete</button>
+          </span>
+        )}
       </div>
       <div className="rule-text">{r.text}</div>
     </li>
@@ -537,15 +621,20 @@ function RulesCard({ hotelId, active, old, systems, canEdit, onChanged }) {
             <select value={form.rule_type} onChange={(e) => setForm({ ...form, rule_type: e.target.value })}>
               {RULE_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
-            <select value={form.system_id} onChange={(e) => setForm({ ...form, system_id: e.target.value })}>
-              <option value="">All systems</option>
-              {systems.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <SystemPicker systems={systems} value={form.system_ids} onChange={(ids) => setForm({ ...form, system_ids: ids })} />
           </div>
           <textarea rows={2} placeholder="Rule or note…" value={form.text} onChange={(e) => setForm({ ...form, text: e.target.value })} />
           <button className="btn">Add rule / note</button>
+          <div className="quick">
+            <span className="muted small">Quick notes (one click, for the systems chosen above):</span>
+            {quick.map((q) => (
+              <button type="button" key={q.id} className="chip" onClick={() => insertRule({ rule_type: q.rule_type, text: q.text, system_ids: form.system_ids })}>＋ {q.text}</button>
+            ))}
+            <button type="button" className="link-btn small" onClick={() => setManaging(true)}>Edit list</button>
+          </div>
         </form>
       )}
+      {managing && <QuickNotesDialog notes={quick} onClose={() => setManaging(false)} onChanged={loadQuick} />}
     </div>
   );
 }
@@ -560,8 +649,13 @@ export function Systems() {
     const { data, error } = await supabase.from('systems').select('*').order('sort_order');
     if (error) return setError(niceError(error));
     setSystems(data);
-    const cells = await fetchAll('hotel_systems', 'system_id, status', (q) => q.eq('status', 'active'));
-    setCounts(countBy(cells, 'system_id'));
+    const cells = await fetchAll('hotel_systems', 'system_id, status');
+    const { count: hotelCount } = await supabase.from('hotels').select('id', { count: 'exact', head: true });
+    const m = {};
+    for (const s of data) m[s.id] = { active: 0, inactive: 0, not_active: 0, na: 0 };
+    for (const c of cells) if (m[c.system_id] && c.status !== 'na') m[c.system_id][c.status]++;
+    for (const s of data) { const x = m[s.id]; x.na = Math.max(0, (hotelCount || 0) - x.active - x.inactive - x.not_active); }
+    setCounts(m);
   }
   useEffect(() => { load(); }, []);
   async function save(s, patch) {
@@ -577,12 +671,15 @@ export function Systems() {
       <div className="card table-card">
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>System</th><th>Hotels active</th><th>How it is updated</th><th>Extranet link</th><th>In use</th></tr></thead>
+            <thead><tr><th>System</th><th>Active</th><th>Inactive</th><th>Not active</th><th>N/A</th><th>How it is updated</th><th>Extranet link</th><th>In use</th></tr></thead>
             <tbody>
               {systems.map((s) => (
                 <tr key={s.id} className={s.is_enabled ? '' : 'inactive'}>
                   <td><strong>{s.name}</strong></td>
-                  <td>{counts[s.id] || 0}</td>
+                  <td><span className="cnt cnt-active">{counts[s.id]?.active ?? 0}</span></td>
+                  <td><span className="cnt cnt-inactive">{counts[s.id]?.inactive ?? 0}</span></td>
+                  <td><span className="cnt cnt-not_active">{counts[s.id]?.not_active ?? 0}</span></td>
+                  <td className="muted">{counts[s.id]?.na ?? 0}</td>
                   <td>{s.update_method === 'manual' ? 'Manually in the extranet' : s.update_method === 'robot' ? 'Robot' : 'API'}</td>
                   <td>
                     {isAdmin
