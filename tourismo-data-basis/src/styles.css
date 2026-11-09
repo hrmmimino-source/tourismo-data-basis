@@ -233,3 +233,31 @@ table.matrix { border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .table.compact td:nth-child(3) select { min-width: 190px; }
 .code-input { max-width: 110px; min-width: 80px; }
 .filters input[type="checkbox"] { flex: none; min-width: 0; }
+
+/* ---------- step 3b ---------- */
+.systems-table .code-input { max-width: none; min-width: 170px; width: 100%; }
+.cnt { display: inline-block; min-width: 28px; text-align: center; padding: 1px 7px; margin-right: 4px; border-radius: 6px; font-size: 12.5px; font-weight: 600; }
+.cnt-active { background: var(--green-soft); color: #1b5e20; }
+.cnt-inactive { background: #fff3cd; color: #8a6d00; }
+.cnt-not_active { background: #eceef1; color: var(--muted); }
+.pill.sys { background: var(--blue-soft); color: #1f4e79; }
+.rule-actions { margin-left: auto; display: inline-flex; gap: 10px; }
+.rule-actions .link-btn { margin: 0; padding: 0; font-size: 12px; }
+.danger-text { color: var(--red) !important; }
+.picker { position: relative; flex: 1; }
+.picker-btn { width: 100%; text-align: left; padding: 9px 11px; font: inherit; background: #fff; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.picker-backdrop { position: fixed; inset: 0; z-index: 20; }
+.picker-pop { position: absolute; z-index: 21; top: calc(100% + 4px); right: 0; min-width: 220px; max-height: 320px; overflow-y: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.15); padding: 10px 12px; }
+.picker-pop label.check { margin: 0 0 6px; }
+.picker-sep { border-top: 1px solid var(--line); margin: 6px 0 8px; }
+.picker-done { width: 100%; margin-top: 4px; }
+.rule-add .row2 > select { flex: 1; }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.quick .muted.small { width: 100%; }
+.chip { border: 1px dashed #c9ced4; background: #fafbfc; border-radius: 999px; padding: 4px 10px; font: 12.5px var(--font); cursor: pointer; color: var(--ink-3); }
+.chip:hover { border-color: var(--orange); background: var(--orange-soft); color: var(--orange-dark); }
+.quick-list { list-style: none; padding: 0; margin: 0 0 12px; }
+.quick-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.grid-detail { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+.systems-table { max-width: 1000px; }
+.systems-table td:nth-child(4) { min-width: 200px; }
