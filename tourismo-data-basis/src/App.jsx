@@ -7,7 +7,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import Team from './pages/Team.jsx';
 import Account from './pages/Account.jsx';
 import ComingSoon from './pages/ComingSoon.jsx';
-import Hotels, { HotelDetail, Systems } from './pages/Hotels.jsx';
+import Hotels, { HotelDetail, Systems, SystemDetail } from './pages/Hotels.jsx';
 
 function FullScreenMessage({ title, text, action }) {
   return (
@@ -56,6 +56,7 @@ export default function App() {
         <Route path="/hotels" element={<Hotels />} />
         <Route path="/hotels/:id" element={<HotelDetail />} />
         <Route path="/systems" element={<Systems />} />
+        <Route path="/systems/:id" element={<SystemDetail />} />
         <Route path="/team" element={<Team />} />
         <Route path="/account" element={<Account />} />
         <Route path="*" element={<Navigate to="/" replace />} />
