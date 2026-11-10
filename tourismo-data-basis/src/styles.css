@@ -272,3 +272,27 @@ table.matrix { border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .note-row { display: flex; gap: 8px; align-items: stretch; margin-bottom: 10px; }
 .note-row textarea { flex: 1; margin: 0; }
 .note-row .btn { align-self: flex-start; white-space: nowrap; }
+
+/* ---------- step 3c: status filters, system page ---------- */
+.cnt-na { background: #fff; color: var(--muted); border: 1px solid var(--line); }
+.totals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: -4px 2px 12px; font-size: 13px; color: var(--ink-3); }
+.totals .cnt { margin-left: 8px; margin-right: 0; }
+.totals .cnt:first-of-type { margin-left: 4px; }
+.status-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chip-filter { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px 6px 6px; border: 1px solid var(--line); background: #fff; border-radius: 999px; font: 13px var(--font); color: var(--ink-3); cursor: pointer; }
+.chip-filter:hover { border-color: var(--orange); }
+.chip-filter.on { border-color: var(--orange); background: var(--orange-soft); color: var(--orange-dark); font-weight: 600; }
+.sys-settings { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sys-settings .url-input { width: 280px; margin: 0; }
+.sys-settings label.check { margin: 0; }
+.plain-link { color: inherit; text-decoration: none; }
+.plain-link:hover { color: var(--orange-dark); text-decoration: underline; }
+.matrix thead th a { text-decoration: none; color: inherit; }
+.matrix thead th a:hover span { color: var(--orange-dark); }
+.matrix thead th.col-on { background: var(--orange-soft); }
+.matrix tr.archived .sticky a { color: var(--muted); font-style: italic; }
+.filters label.check:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.sys-hotels td:nth-child(4) select { min-width: 150px; }
+.sys-hotels td:nth-child(5) select { min-width: 200px; }
+.sys-hotels .code-input { width: 100%; min-width: 150px; max-width: none; }
+.sys-hotels td:nth-child(2) .pill { margin-left: 6px; }
