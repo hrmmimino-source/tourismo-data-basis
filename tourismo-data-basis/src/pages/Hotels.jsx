@@ -616,19 +616,24 @@ function RulesCard({ hotelId, active, old, systems, canEdit, onChanged }) {
         </>
       )}
       {canEdit && (
-        <div className="quick-box">
+        <form className="quick-box" onSubmit={add}>
           <div className="quick-head">
-            <strong>Quick notes</strong>
-            <span className="muted small">one click adds the note for</span>
+            <strong>Add note</strong>
+            <span className="muted small">for</span>
             <SystemPicker systems={systems} value={form.system_ids} onChange={(ids) => setForm({ ...form, system_ids: ids })} />
           </div>
+          <div className="note-row">
+            <textarea rows={2} placeholder="Write a note…" value={form.text} onChange={(e) => setForm({ ...form, text: e.target.value })} />
+            <button className="btn">Add note</button>
+          </div>
           <div className="quick">
+            <span className="muted small">Quick notes (one click):</span>
             {quick.map((q) => (
               <button type="button" key={q.id} className="chip" onClick={() => insertRule({ rule_type: q.rule_type, text: q.text, system_ids: form.system_ids })}>＋ {q.text}</button>
             ))}
             <button type="button" className="link-btn small" onClick={() => setManaging(true)}>Edit list</button>
           </div>
-        </div>
+        </form>
       )}
       {managing && <QuickNotesDialog notes={quick} onClose={() => setManaging(false)} onChanged={loadQuick} />}
     </div>
