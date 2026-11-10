@@ -261,3 +261,9 @@ table.matrix { border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .grid-detail { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
 .systems-table { max-width: 1000px; }
 .systems-table td:nth-child(4) { min-width: 200px; }
+
+/* ---------- quick notes box ---------- */
+.quick-box { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.quick-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.quick-head .picker { flex: 0 1 220px; }
+.quick-box .quick { margin-top: 0; }
