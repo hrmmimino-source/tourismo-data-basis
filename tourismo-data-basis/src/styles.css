@@ -267,3 +267,8 @@ table.matrix { border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .quick-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .quick-head .picker { flex: 0 1 220px; }
 .quick-box .quick { margin-top: 0; }
+
+/* ---------- note row (free text, no type list) ---------- */
+.note-row { display: flex; gap: 8px; align-items: stretch; margin-bottom: 10px; }
+.note-row textarea { flex: 1; margin: 0; }
+.note-row .btn { align-self: flex-start; white-space: nowrap; }
