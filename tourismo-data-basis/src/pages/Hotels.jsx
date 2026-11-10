@@ -38,16 +38,97 @@ function personText(cell) {
   return cell.responsible_excel_name || '';
 }
 
+// person filter value: '' | 'me' | '<profile id>' | 'excel:<old Excel name>'
+function personMatch(cell, person, meId) {
+  if (!person) return true;
+  if (person === 'me') return cell.responsible_id === meId;
+  if (person.startsWith('excel:')) return !cell.responsible_id && cell.responsible_excel_name === person.slice(6);
+  return cell.responsible_id === person;
+}
+
+// everyone who is responsible for at least one cell (accounts + old Excel names)
+function personOptionsOf(cells) {
+  const names = new Map();
+  for (const c of cells) {
+    if (!c.responsible_id && !c.responsible_excel_name) continue;
+    const key = c.responsible_id || `excel:${c.responsible_excel_name}`;
+    names.set(key, c.responsible_id
+      ? `${c.responsible_name || c.responsible_short}${c.responsible_active === false ? ' (former member)' : ''}`
+      : `${c.responsible_excel_name} (no account yet)`);
+  }
+  return [...names.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+// save one hotel × system cell (status / responsible / hotel ID in that system)
+export async function saveCell(hotelId, systemId, cur, patch) {
+  const row = {
+    hotel_id: hotelId,
+    system_id: systemId,
+    status: cur?.status || 'na',
+    responsible_id: cur?.responsible_id ?? null,
+    responsible_excel_name: cur?.responsible_excel_name ?? null,
+    b2b_only: cur?.b2b_only ?? false,
+    partner_hotel_code: cur?.partner_hotel_code ?? null,
+    ...patch,
+  };
+  const { error } = await supabase.from('hotel_systems').upsert(row, { onConflict: 'hotel_id,system_id' });
+  if (error) { alert(niceError(error)); return false; }
+  return true;
+}
+
+function StatusSelect({ value, onChange }) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} className={`sel-${value}`}>
+      {STATUSES.map((x) => <option key={x.value} value={x.value} title={x.hint}>{x.label}</option>)}
+    </select>
+  );
+}
+
+function PersonSelect({ cell, people, onChange }) {
+  const unlinked = !cell.responsible_id && cell.responsible_excel_name;
+  const formerMember = cell.responsible_id && cell.responsible_active === false;
+  return (
+    <>
+      <select value={cell.responsible_id || ''} onChange={(e) => onChange(e.target.value || null)}>
+        <option value="">{unlinked ? `${cell.responsible_excel_name} (no account yet)` : '— nobody —'}</option>
+        {people.filter((p) => p.is_active).map((p) => <option key={p.id} value={p.id}>{p.full_name || p.short_name}</option>)}
+        {formerMember && <option value={cell.responsible_id}>{cell.responsible_name} (former member)</option>}
+      </select>
+      {formerMember && <div className="hint warn-text">Former member — choose someone else</div>}
+    </>
+  );
+}
+
+function PersonView({ cell }) {
+  if (cell.responsible_name) return <span>{cell.responsible_name}</span>;
+  if (cell.responsible_excel_name) return <em>{cell.responsible_excel_name}</em>;
+  return <span className="muted">—</span>;
+}
+
+function HotelCodeInput({ cell, onSave }) {
+  return (
+    <input className="code-input" defaultValue={cell.partner_hotel_code || ''} placeholder="—"
+      onBlur={(e) => { const v = e.target.value.trim() || null; if (v !== (cell.partner_hotel_code || null)) onSave(v); }} />
+  );
+}
+
+const STATUS_FILTERS = [
+  { value: '', label: 'Any status' },
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive (closed now)' },
+  { value: 'not_active', label: 'Not active (not in our account)' },
+  { value: 'na', label: 'N/A' },
+];
+
 // ================================================================= HOTELS PAGE (list + matrix)
 export default function Hotels() {
-  const { isManager, profile: me } = useAuth();
+  const { profile: me, isManager } = useAuth();
   const navigate = useNavigate();
   const [hotels, setHotels] = useState([]);
   const [rooms, setRooms] = useState([]);
   const [cells, setCells] = useState([]);
   const [rules, setRules] = useState([]);
   const [systems, setSystems] = useState([]);
-  const [people, setPeople] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [view, setView] = useState(() => { try { return localStorage.getItem('hotels.view') || 'list'; } catch { return 'list'; } });
@@ -55,7 +136,9 @@ export default function Hotels() {
   const [city, setCity] = useState('');
   const [person, setPerson] = useState('');
   const [system, setSystem] = useState('');
-  const [showInactive, setShowInactive] = useState(false);
+  const [stat, setStat] = useState('');
+  const [noActive, setNoActive] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [adding, setAdding] = useState(false);
 
   useEffect(() => { try { localStorage.setItem('hotels.view', view); } catch { /* ignore */ } }, [view]);
@@ -63,15 +146,14 @@ export default function Hotels() {
   useEffect(() => {
     (async () => {
       try {
-        const [h, r, c, ru, s, p] = await Promise.all([
+        const [h, r, c, ru, s] = await Promise.all([
           fetchAll('hotels', '*', (x) => x.order('name')),
           fetchAll('room_types', 'id, hotel_id, is_active'),
           fetchAll('v_matrix', 'hotel_id, system_id, status, responsible_id, responsible_excel_name, responsible_name, responsible_short, responsible_active'),
           fetchAll('hotel_rules', 'id, hotel_id, is_active, rule_type'),
           fetchAll('systems', '*', (x) => x.order('sort_order')),
-          fetchAll('profiles', 'id, full_name, short_name, is_active', (x) => x.order('full_name')),
         ]);
-        setHotels(h); setRooms(r); setCells(c); setRules(ru); setSystems(s); setPeople(p);
+        setHotels(h); setRooms(r); setCells(c); setRules(ru); setSystems(s);
       } catch (e) { setError(niceError(e)); }
       setLoading(false);
     })();
@@ -82,43 +164,51 @@ export default function Hotels() {
     for (const c of cells) (m[c.hotel_id] ||= {})[c.system_id] = c;
     return m;
   }, [cells]);
+  const cellOf = (hotelId, systemId) => byHotel[hotelId]?.[systemId] || { hotel_id: hotelId, system_id: systemId, status: 'na' };
   const roomCount = useMemo(() => countBy(rooms.filter((r) => r.is_active), 'hotel_id'), [rooms]);
   const ruleCount = useMemo(() => countBy(rules.filter((r) => r.is_active && r.rule_type !== 'note'), 'hotel_id'), [rules]);
   const cities = useMemo(() => [...new Set(hotels.map((h) => h.city).filter(Boolean))].sort(), [hotels]);
-  const personOptions = useMemo(() => {
-    const names = new Map();
-    for (const c of cells) {
-      if (c.status !== 'active') continue;
-      const key = c.responsible_id || `excel:${c.responsible_excel_name}`;
-      if (!c.responsible_id && !c.responsible_excel_name) continue;
-      names.set(key, c.responsible_id ? (c.responsible_name || c.responsible_short) : `${c.responsible_excel_name} (no account yet)`);
-    }
-    return [...names.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [cells]);
+  const personOptions = useMemo(() => personOptionsOf(cells), [cells]);
+  const archivedCount = hotels.filter((h) => !h.is_active).length;
 
-  const matchesPerson = (cell) => {
-    if (!person) return true;
-    if (person === 'me') return cell.responsible_id === me.id;
-    if (person.startsWith('excel:')) return !cell.responsible_id && cell.responsible_excel_name === person.slice(6);
-    return cell.responsible_id === person;
+  // a cell "matches" when it fits the system / status / responsible filters
+  const cellFilterOn = !!(system || stat || person);
+  const cellMatches = (c) => {
+    if (system && c.system_id !== Number(system)) return false;
+    if (stat && c.status !== stat) return false;
+    if (!stat && system && c.status === 'na') return false;
+    if (person && !personMatch(c, person, me.id)) return false;
+    return true;
   };
 
   const shown = useMemo(() => hotels.filter((h) => {
-    if (!showInactive && !h.is_active) return false;
+    if (!showArchived && !h.is_active) return false;
     if (city && h.city !== city) return false;
     if (q && !(`${h.name} ${h.code || ''}`.toLowerCase().includes(q.toLowerCase()))) return false;
-    const row = byHotel[h.id] || {};
-    if (system && row[system]?.status !== 'active') return false;
-    if (person && !Object.values(row).some((c) => c.status === 'active' && (!system || c.system_id === Number(system)) && matchesPerson(c))) return false;
+    if (noActive && systems.some((s) => cellOf(h.id, s.id).status === 'active')) return false;
+    if (cellFilterOn && !systems.some((s) => cellMatches(cellOf(h.id, s.id)))) return false;
     return true;
-  }), [hotels, q, city, person, system, showInactive, byHotel]);
+  }), [hotels, systems, q, city, person, system, stat, noActive, showArchived, byHotel]);
+
+  // totals of the shown hotels, per status (only cells that match the filters)
+  const totals = useMemo(() => {
+    const t = { active: 0, inactive: 0, not_active: 0, na: 0 };
+    for (const h of shown) for (const s of systems) {
+      const c = cellOf(h.id, s.id);
+      if (!cellFilterOn || cellMatches(c)) t[c.status]++;
+    }
+    return t;
+  }, [shown, systems, byHotel, system, stat, person]);
+
+  const clearFilters = () => { setQ(''); setCity(''); setPerson(''); setSystem(''); setStat(''); setNoActive(false); };
+  const anyFilter = q || city || person || system || stat || noActive;
 
   return (
     <div className="page wide">
       <div className="page-head">
         <div>
           <h1>Hotels &amp; systems</h1>
-          <p className="muted">{hotels.filter((h) => h.is_active).length} active hotels · {hotels.filter((h) => !h.is_active).length} inactive hotels · who handles which hotel in which system</p>
+          <p className="muted">{hotels.length - archivedCount} hotels we work with{archivedCount > 0 && ` · ${archivedCount} archived`} · who handles which hotel in which system</p>
         </div>
         <div className="head-actions">
           <div className="seg">
@@ -141,13 +231,28 @@ export default function Hotels() {
           <option value="">All systems</option>
           {systems.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
+        <select value={stat} onChange={(e) => setStat(e.target.value)} className={stat ? `sel-${stat}` : ''}>
+          {STATUS_FILTERS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
+        </select>
         <select value={person} onChange={(e) => setPerson(e.target.value)}>
           <option value="">Anyone responsible</option>
           <option value="me">Me</option>
           {personOptions.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
         </select>
-        <label className="check"><input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} /> Show inactive hotels</label>
-        <span className="muted count">{shown.length} shown</span>
+        <label className="check"><input type="checkbox" checked={noActive} onChange={(e) => setNoActive(e.target.checked)} /> Not active in any system</label>
+        <label className="check" title={archivedCount ? '' : 'No hotel is archived yet. To archive one: open the hotel → Edit hotel → untick “We still work with this hotel”.'}>
+          <input type="checkbox" checked={showArchived} disabled={!archivedCount && !showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived hotels ({archivedCount})
+        </label>
+        {anyFilter && <button className="link-btn small" onClick={clearFilters}>Clear filters</button>}
+        <span className="muted count">{shown.length} hotels</span>
+      </div>
+
+      <div className="totals">
+        <span className="muted small">{cellFilterOn ? 'Matching hotel × system cells:' : 'Hotel × system cells:'}</span>
+        <span className="cnt cnt-active">{totals.active}</span> active
+        <span className="cnt cnt-inactive">{totals.inactive}</span> inactive
+        <span className="cnt cnt-not_active">{totals.not_active}</span> not active
+        <span className="cnt cnt-na">{totals.na}</span> N/A
       </div>
 
       {loading ? <div className="card muted">Loading…</div> : view === 'list' ? (
@@ -169,7 +274,7 @@ export default function Hotels() {
                       <td>{ruleCount[h.id] ? <span className="pill warn">{ruleCount[h.id]}</span> : <span className="muted">—</span>}</td>
                       <td>
                         {h.no_prices_lock && <span className="pill lock">!!!!! no prices</span>}
-                        {!h.is_active && <span className="pill">inactive</span>}
+                        {!h.is_active && <span className="pill">archived</span>}
                       </td>
                     </tr>
                   );
@@ -182,31 +287,33 @@ export default function Hotels() {
       ) : (
         <div className="card table-card">
           <div className="legend">
-            <span><i className="sw st-active" /> Active (name = responsible)</span>
+            <span><i className="sw st-active" /> Active</span>
             <span><i className="sw st-inactive" /> Inactive (closed now)</span>
             <span><i className="sw st-not_active" /> Not active</span>
             <span><i className="sw st-na" /> N/A</span>
-            <span><em>Italic</em> = name from the old Excel, no account yet</span>
+            <span>Names = responsible person · <em>italic</em> = name from the old Excel, no account yet</span>
+            {cellFilterOn && <span className="muted">Faded cells don’t match the filters</span>}
           </div>
           <div className="table-wrap matrix-wrap">
             <table className="matrix">
-              <thead><tr><th className="sticky">Hotel</th>{systems.map((s) => <th key={s.id}><span>{s.name}</span></th>)}</tr></thead>
+              <thead><tr><th className="sticky">Hotel</th>{systems.map((s) => <th key={s.id} className={system && Number(system) === s.id ? 'col-on' : ''}><Link to={`/systems/${s.id}`}><span>{s.name}</span></Link></th>)}</tr></thead>
               <tbody>
                 {shown.map((h) => (
-                  <tr key={h.id}>
+                  <tr key={h.id} className={h.is_active ? '' : 'archived'}>
                     <td className="sticky"><Link to={`/hotels/${h.id}`}>{h.name}</Link></td>
                     {systems.map((s) => {
-                      const c = byHotel[h.id]?.[s.id] || { status: 'na' };
-                      const dim = person && !(c.status === 'active' && matchesPerson(c));
+                      const c = cellOf(h.id, s.id);
+                      const dim = cellFilterOn && !cellMatches(c);
+                      const who = personText(c);
                       return (
-                        <td key={s.id} className={`st-${c.status} ${dim ? 'dim' : ''}`} title={`${s.name}: ${statusLabel(c.status)}`}>
-                          {c.status === 'active' && (c.responsible_id ? personText(c) : <em>{personText(c) || '?'}</em>)}
-                          {c.status === 'inactive' && 'closed'}
+                        <td key={s.id} className={`st-${c.status} ${dim ? 'dim' : ''}`} title={`${h.name} · ${s.name}: ${statusLabel(c.status)}${who ? ` · ${who}` : ''}`}>
+                          {who ? (c.responsible_id ? who : <em>{who}</em>) : c.status === 'active' ? <em>?</em> : c.status === 'inactive' ? 'closed' : ''}
                         </td>
                       );
                     })}
                   </tr>
                 ))}
+                {!shown.length && <tr><td className="sticky muted" colSpan={systems.length + 1}>No hotels match these filters.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -304,7 +411,7 @@ export function HotelDetail() {
       <div className="page-head">
         <div>
           <h1>{hotel.name}</h1>
-          <p className="muted">{[hotel.code, hotel.city, hotel.country].filter(Boolean).join(' · ')}{!hotel.is_active && ' · inactive hotel'}</p>
+          <p className="muted">{[hotel.code, hotel.city, hotel.country].filter(Boolean).join(' · ')}{!hotel.is_active && ' · archived hotel'}</p>
         </div>
         {isManager && <button className="btn" onClick={() => setEditing(true)}>Edit hotel</button>}
       </div>
@@ -342,7 +449,7 @@ function EditHotel({ hotel, onClose, onSave }) {
         <label>Notes<textarea rows={3} value={form.notes} onChange={set('notes')} /></label>
         <label className="check"><input type="checkbox" checked={form.no_prices_lock} onChange={set('no_prices_lock')} disabled={!canLock && hotel.no_prices_lock} />
           “!!!!!” No prices — lock the whole hotel (must stay closed)</label>
-        <label className="check"><input type="checkbox" checked={form.is_active} onChange={set('is_active')} /> We still work with this hotel (active)</label>
+        <label className="check"><input type="checkbox" checked={form.is_active} onChange={set('is_active')} /> We still work with this hotel (untick to archive it)</label>
         <div className="modal-actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary">Save</button>
@@ -356,22 +463,9 @@ function EditHotel({ hotel, onClose, onSave }) {
 function SystemsCard({ hotel, cells, systems, people, canEdit, onChanged }) {
   const [savedId, setSavedId] = useState(null);
   const bySystem = Object.fromEntries(cells.map((c) => [c.system_id, c]));
-  const activePeople = people.filter((p) => p.is_active);
 
   async function save(system, patch) {
-    const cur = bySystem[system.id] || {};
-    const row = {
-      hotel_id: hotel.id,
-      system_id: system.id,
-      status: cur.status || 'na',
-      responsible_id: cur.responsible_id ?? null,
-      responsible_excel_name: cur.responsible_excel_name ?? null,
-      b2b_only: cur.b2b_only ?? false,
-      partner_hotel_code: cur.partner_hotel_code ?? null,
-      ...patch,
-    };
-    const { error } = await supabase.from('hotel_systems').upsert(row, { onConflict: 'hotel_id,system_id' });
-    if (error) return alert(niceError(error));
+    if (!(await saveCell(hotel.id, system.id, bySystem[system.id], patch))) return;
     setSavedId(system.id); setTimeout(() => setSavedId(null), 1500);
     onChanged();
   }
@@ -386,36 +480,12 @@ function SystemsCard({ hotel, cells, systems, people, canEdit, onChanged }) {
           <tbody>
             {systems.map((s) => {
               const c = bySystem[s.id] || { status: 'na' };
-              const unlinked = !c.responsible_id && c.responsible_excel_name;
-              const inactivePerson = c.responsible_id && c.responsible_active === false;
               return (
                 <tr key={s.id} className={`row-${c.status}`}>
-                  <td><strong>{s.name}</strong>{!s.is_enabled && <span className="pill">off</span>}</td>
-                  <td>
-                    {canEdit ? (
-                      <select value={c.status} onChange={(e) => save(s, { status: e.target.value })} className={`sel-${c.status}`}>
-                        {STATUSES.map((x) => <option key={x.value} value={x.value} title={x.hint}>{x.label}</option>)}
-                      </select>
-                    ) : <span className={`pill st-${c.status}`}>{statusLabel(c.status)}</span>}
-                  </td>
-                  <td>
-                    {canEdit ? (
-                      <select value={c.responsible_id || ''} onChange={(e) => save(s, { responsible_id: e.target.value || null })}>
-                        <option value="">{unlinked ? `${c.responsible_excel_name} (no account yet)` : '— nobody —'}</option>
-                        {activePeople.map((p) => <option key={p.id} value={p.id}>{p.full_name || p.short_name}</option>)}
-                        {inactivePerson && <option value={c.responsible_id}>{c.responsible_name} (former member)</option>}
-                      </select>
-                    ) : (
-                      <span>{c.responsible_name || (unlinked ? <em>{c.responsible_excel_name}</em> : <span className="muted">—</span>)}</span>
-                    )}
-                    {inactivePerson && <div className="hint warn-text">Former member — choose someone else</div>}
-                  </td>
-                  <td>
-                    {canEdit
-                      ? <input className="code-input" defaultValue={c.partner_hotel_code || ''} placeholder="—"
-                          onBlur={(e) => { const v = e.target.value.trim() || null; if (v !== (c.partner_hotel_code || null)) save(s, { partner_hotel_code: v }); }} />
-                      : <span className="muted">{c.partner_hotel_code || '—'}</span>}
-                  </td>
+                  <td><Link to={`/systems/${s.id}`} className="plain-link"><strong>{s.name}</strong></Link>{!s.is_enabled && <span className="pill">off</span>}</td>
+                  <td>{canEdit ? <StatusSelect value={c.status} onChange={(v) => save(s, { status: v })} /> : <span className={`pill st-${c.status}`}>{statusLabel(c.status)}</span>}</td>
+                  <td>{canEdit ? <PersonSelect cell={c} people={people} onChange={(v) => save(s, { responsible_id: v })} /> : <PersonView cell={c} />}</td>
+                  <td>{canEdit ? <HotelCodeInput cell={c} onSave={(v) => save(s, { partner_hotel_code: v })} /> : <span className="muted">{c.partner_hotel_code || '—'}</span>}</td>
                   <td className="saved">{savedId === s.id && '✓ saved'}</td>
                 </tr>
               );
@@ -641,8 +711,11 @@ function RulesCard({ hotelId, active, old, systems, canEdit, onChanged }) {
 }
 
 // ================================================================= SYSTEMS PAGE
+const methodLabel = (m) => (m === 'manual' ? 'Manually in the extranet' : m === 'robot' ? 'Robot' : 'API');
+
 export function Systems() {
   const { isAdmin } = useAuth();
+  const navigate = useNavigate();
   const [systems, setSystems] = useState([]);
   const [counts, setCounts] = useState({});
   const [error, setError] = useState('');
@@ -650,12 +723,15 @@ export function Systems() {
     const { data, error } = await supabase.from('systems').select('*').order('sort_order');
     if (error) return setError(niceError(error));
     setSystems(data);
-    const cells = await fetchAll('hotel_systems', 'system_id, status');
-    const { count: hotelCount } = await supabase.from('hotels').select('id', { count: 'exact', head: true });
+    const [cells, hotels] = await Promise.all([
+      fetchAll('hotel_systems', 'hotel_id, system_id, status'),
+      fetchAll('hotels', 'id, is_active'),
+    ]);
+    const working = new Set(hotels.filter((h) => h.is_active).map((h) => h.id));
     const m = {};
     for (const s of data) m[s.id] = { active: 0, inactive: 0, not_active: 0, na: 0 };
-    for (const c of cells) if (m[c.system_id] && c.status !== 'na') m[c.system_id][c.status]++;
-    for (const s of data) { const x = m[s.id]; x.na = Math.max(0, (hotelCount || 0) - x.active - x.inactive - x.not_active); }
+    for (const c of cells) if (m[c.system_id] && working.has(c.hotel_id) && c.status !== 'na') m[c.system_id][c.status]++;
+    for (const s of data) { const x = m[s.id]; x.na = Math.max(0, working.size - x.active - x.inactive - x.not_active); }
     setCounts(m);
   }
   useEffect(() => { load(); }, []);
@@ -664,38 +740,183 @@ export function Systems() {
     if (error) return alert(niceError(error));
     load();
   }
+  const stop = (e) => e.stopPropagation();
   return (
     <div className="page">
       <h1>Systems</h1>
-      <p className="muted">The distribution systems where stop sales and openings are made.{!isAdmin && ' Only admins can edit this page.'}</p>
+      <p className="muted">The distribution systems where stop sales and openings are made. Click a system to see and manage its hotels.{!isAdmin && ' Only admins can change the link and “In use”.'}</p>
       {error && <div className="alert error">{error}</div>}
       <div className="card table-card">
         <div className="table-wrap">
-          <table className="table">
+          <table className="table clickable">
             <thead><tr><th>System</th><th>Active</th><th>Inactive</th><th>Not active</th><th>N/A</th><th>How it is updated</th><th>Extranet link</th><th>In use</th></tr></thead>
             <tbody>
               {systems.map((s) => (
-                <tr key={s.id} className={s.is_enabled ? '' : 'inactive'}>
-                  <td><strong>{s.name}</strong></td>
+                <tr key={s.id} className={s.is_enabled ? '' : 'inactive'} onClick={() => navigate(`/systems/${s.id}`)}>
+                  <td><Link to={`/systems/${s.id}`} className="plain-link"><strong>{s.name}</strong></Link> <span className="muted small">›</span></td>
                   <td><span className="cnt cnt-active">{counts[s.id]?.active ?? 0}</span></td>
                   <td><span className="cnt cnt-inactive">{counts[s.id]?.inactive ?? 0}</span></td>
                   <td><span className="cnt cnt-not_active">{counts[s.id]?.not_active ?? 0}</span></td>
-                  <td className="muted">{counts[s.id]?.na ?? 0}</td>
-                  <td>{s.update_method === 'manual' ? 'Manually in the extranet' : s.update_method === 'robot' ? 'Robot' : 'API'}</td>
-                  <td>
+                  <td><span className="cnt cnt-na">{counts[s.id]?.na ?? 0}</span></td>
+                  <td>{methodLabel(s.update_method)}</td>
+                  <td onClick={stop}>
                     {isAdmin
                       ? <input className="url-input" defaultValue={s.extranet_url || ''} placeholder="https://…"
                           onBlur={(e) => { const v = e.target.value.trim() || null; if (v !== (s.extranet_url || null)) save(s, { extranet_url: v }); }} />
                       : s.extranet_url ? <a href={s.extranet_url} target="_blank" rel="noreferrer">Open ↗</a> : <span className="muted">—</span>}
                   </td>
-                  <td><input type="checkbox" checked={s.is_enabled} disabled={!isAdmin} onChange={(e) => save(s, { is_enabled: e.target.checked })} /></td>
+                  <td onClick={stop}><input type="checkbox" checked={s.is_enabled} disabled={!isAdmin} onChange={(e) => save(s, { is_enabled: e.target.checked })} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
-      <p className="hint">Robots for extranets come in Phase 2. Until then every system is updated manually, and the platform tracks who did it.</p>
+      <p className="hint">Counts are for hotels we work with (archived hotels are not counted). Robots for extranets come in Phase 2. Until then every system is updated manually, and the platform tracks who did it.</p>
+    </div>
+  );
+}
+
+// ================================================================= ONE SYSTEM: all its hotels
+export function SystemDetail() {
+  const { id } = useParams();
+  const systemId = Number(id);
+  const { isManager, isAdmin, profile: me } = useAuth();
+  const [system, setSystem] = useState(null);
+  const [hotels, setHotels] = useState([]);
+  const [cells, setCells] = useState([]);
+  const [people, setPeople] = useState([]);
+  const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+  const [city, setCity] = useState('');
+  const [stat, setStat] = useState('');
+  const [person, setPerson] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [savedId, setSavedId] = useState(null);
+
+  async function loadCells() {
+    setCells(await fetchAll('v_matrix', '*', (x) => x.eq('system_id', systemId)));
+  }
+  async function load() {
+    try {
+      const [s, h, p] = await Promise.all([
+        supabase.from('systems').select('*').eq('id', systemId).single(),
+        fetchAll('hotels', '*', (x) => x.order('name')),
+        supabase.from('profiles').select('id, full_name, short_name, is_active').order('full_name'),
+      ]);
+      for (const x of [s, p]) if (x.error) throw x.error;
+      setSystem(s.data); setHotels(h); setPeople(p.data);
+      await loadCells();
+    } catch (e) { setError(niceError(e)); }
+  }
+  useEffect(() => { setSystem(null); load(); }, [systemId]);
+
+  const byHotel = useMemo(() => Object.fromEntries(cells.map((c) => [c.hotel_id, c])), [cells]);
+  const cellOf = (h) => byHotel[h.id] || { hotel_id: h.id, system_id: systemId, status: 'na' };
+  const cities = useMemo(() => [...new Set(hotels.map((h) => h.city).filter(Boolean))].sort(), [hotels]);
+  const personOptions = useMemo(() => personOptionsOf(cells), [cells]);
+  const working = hotels.filter((h) => h.is_active);
+  const archivedCount = hotels.length - working.length;
+  const n = (st) => working.filter((h) => cellOf(h).status === st).length;
+
+  const shown = hotels.filter((h) => {
+    if (!showArchived && !h.is_active) return false;
+    if (city && h.city !== city) return false;
+    if (q && !(`${h.name} ${h.code || ''}`.toLowerCase().includes(q.toLowerCase()))) return false;
+    const c = cellOf(h);
+    if (stat && c.status !== stat) return false;
+    if (person && !personMatch(c, person, me.id)) return false;
+    return true;
+  });
+
+  async function save(h, patch) {
+    if (!(await saveCell(h.id, systemId, byHotel[h.id], patch))) return;
+    setSavedId(h.id); setTimeout(() => setSavedId(null), 1500);
+    loadCells();
+  }
+  async function saveSystem(patch) {
+    const { error } = await supabase.from('systems').update(patch).eq('id', systemId);
+    if (error) return alert(niceError(error));
+    setSystem({ ...system, ...patch });
+  }
+
+  if (error) return <div className="page"><div className="alert error">{error}</div><Link to="/systems">← Back to systems</Link></div>;
+  if (!system) return <div className="page muted">Loading…</div>;
+
+  return (
+    <div className="page wide">
+      <Link to="/systems" className="back">← All systems</Link>
+      <div className="page-head">
+        <div>
+          <h1>{system.name}{!system.is_enabled && <span className="pill">not in use</span>}</h1>
+          <p className="muted">{methodLabel(system.update_method)}{system.extranet_url && <> · <a href={system.extranet_url} target="_blank" rel="noreferrer">Open extranet ↗</a></>}</p>
+        </div>
+        {isAdmin && (
+          <div className="sys-settings">
+            <input className="url-input" defaultValue={system.extranet_url || ''} placeholder="Extranet link https://…"
+              onBlur={(e) => { const v = e.target.value.trim() || null; if (v !== (system.extranet_url || null)) saveSystem({ extranet_url: v }); }} />
+            <label className="check"><input type="checkbox" checked={system.is_enabled} onChange={(e) => saveSystem({ is_enabled: e.target.checked })} /> In use</label>
+          </div>
+        )}
+      </div>
+
+      <div className="status-chips">
+        {STATUSES.map((st) => (
+          <button key={st.value} className={`chip-filter ${stat === st.value ? 'on' : ''}`} title={st.hint} onClick={() => setStat(stat === st.value ? '' : st.value)}>
+            <span className={`cnt cnt-${st.value}`}>{n(st.value)}</span> {st.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="filters card">
+        <input placeholder="Search hotel…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select value={city} onChange={(e) => setCity(e.target.value)}>
+          <option value="">All cities</option>
+          {cities.map((c) => <option key={c}>{c}</option>)}
+        </select>
+        <select value={stat} onChange={(e) => setStat(e.target.value)} className={stat ? `sel-${stat}` : ''}>
+          {STATUS_FILTERS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
+        </select>
+        <select value={person} onChange={(e) => setPerson(e.target.value)}>
+          <option value="">Anyone responsible</option>
+          <option value="me">Me</option>
+          {personOptions.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </select>
+        <label className="check" title={archivedCount ? '' : 'No hotel is archived yet.'}>
+          <input type="checkbox" checked={showArchived} disabled={!archivedCount && !showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived hotels ({archivedCount})
+        </label>
+        <span className="muted count">{shown.length} hotels</span>
+      </div>
+
+      <div className="card table-card">
+        <div className="table-wrap">
+          <table className="table compact sys-hotels">
+            <thead><tr><th>Code</th><th>Hotel</th><th>City</th><th>Status</th><th>Responsible</th><th>Hotel ID in {system.name} <span className="muted small">(optional)</span></th><th /></tr></thead>
+            <tbody>
+              {shown.map((h) => {
+                const c = cellOf(h);
+                return (
+                  <tr key={h.id} className={`row-${c.status} ${h.is_active ? '' : 'inactive'}`}>
+                    <td className="muted">{h.code}</td>
+                    <td>
+                      <Link to={`/hotels/${h.id}`} className="plain-link"><strong>{h.name}</strong></Link>
+                      {h.no_prices_lock && <span className="pill lock">!!!!!</span>}
+                      {!h.is_active && <span className="pill">archived</span>}
+                    </td>
+                    <td>{h.city || <span className="muted">—</span>}</td>
+                    <td>{isManager ? <StatusSelect value={c.status} onChange={(v) => save(h, { status: v })} /> : <span className={`pill st-${c.status}`}>{statusLabel(c.status)}</span>}</td>
+                    <td>{isManager ? <PersonSelect cell={c} people={people} onChange={(v) => save(h, { responsible_id: v })} /> : <PersonView cell={c} />}</td>
+                    <td>{isManager ? <HotelCodeInput key={`${h.id}-${c.partner_hotel_code || ''}`} cell={c} onSave={(v) => save(h, { partner_hotel_code: v })} /> : <span className="muted">{c.partner_hotel_code || '—'}</span>}</td>
+                    <td className="saved">{savedId === h.id && '✓ saved'}</td>
+                  </tr>
+                );
+              })}
+              {!shown.length && <tr><td colSpan={7} className="muted">No hotels match these filters.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p className="hint">Changes save immediately and are the same as on each hotel’s page. Click a hotel name to open the hotel.</p>
     </div>
   );
 }
